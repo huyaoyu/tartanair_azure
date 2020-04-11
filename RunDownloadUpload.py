@@ -36,7 +36,8 @@ if __name__ == "__main__":
 
     # zip_2_dir.
     if ( "" != args.zip_2_dir ):
-        zip2dir = args.zip_2_dir + "/"
+        if ( "/" != args.zip_2_dir[-1] ):
+            zip2dir = args.zip_2_dir + "/"
     else:
         zip2dir = args.zip_2_dir
 
@@ -72,23 +73,24 @@ if __name__ == "__main__":
 
         ret = app(dArgs)
 
+        retList[count] = ret
+        count += 1
+
         if ( STAT_OK == ret ):
             pass
         elif ( STAT_FAIL == ret ):
             flagOK = False
             print("Failed with zipname = {}, idx = {}, count = {}. ".format( d["name"], d["idx"], count ))
-            print("Abort current processing for input file %s. " % ( args.infile ))
-            break
+            print("Abort current idx for input file %s. " % ( args.infile ))
+            continue
         else:
             print("Unexpected return value {}. ".format(ret))
-
-        retList[count] = ret
-        count += 1
 
     if ( flagOK ):
         print("Process OK. ")
     else:
-        print("Process failed. ")
+        print("Process failed. The return values of app are: ")
+        print(retList)
     
     end = time.time()
 
