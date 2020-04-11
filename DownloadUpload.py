@@ -25,6 +25,10 @@ STAT_FAIL = 1
 # Global message delimiter.
 MSG_DELIMITER = "|"
 
+def ceil_integer(val, base):
+    ceilVal = int( np.ceil( 1.0*val/base ) * base )
+    return ceilVal, ceilVal - val 
+
 def cprint(msg, flagSilent=False):
     if ( not flagSilent ):
         print(msg)
@@ -92,7 +96,7 @@ def read_name_list(fn):
 
     return lines
 
-def generate_name_lists(fn, testNum=0):
+def generate_name_lists(fn, flagFlow=False, testNum=0 ):
     infile0 = read_name_list(fn)
 
     infile1 = []
@@ -107,10 +111,16 @@ def generate_name_lists(fn, testNum=0):
 
     for i in range( len(infile0) ):
         names0 = read_name_list(infile0[i])
-        nameList0 = nameList0 + names0
+        if ( flagFlow ):
+            nameList0 = nameList0 + names0[:-1]
+        else:
+            nameList0 = nameList0 + names0
 
         names1 = read_name_list(infile1[i])
-        nameList1 = nameList1 + names1
+        if ( flagFlow ):
+            nameList1 = nameList1 + names1[:-1]
+        else:
+            nameList1 = nameList1 + names1
 
         poseParams.append( {
             "sourceStart": names0[0],
@@ -121,6 +131,10 @@ def generate_name_lists(fn, testNum=0):
 
     assert( N == len(nameList1) )
 
+    poseFileExpNum = N
+    if ( flagFlow ):
+        poseFileExpNum = poseFileExpNum + len(infile0)
+
     if ( testNum > 0 ):
         if ( testNum < N ):
             N = testNum
@@ -128,15 +142,11 @@ def generate_name_lists(fn, testNum=0):
     nameList0 = nameList0[:N]
     nameList1 = nameList1[:N]
 
-    return nameList0, nameList1, poseParams
+    return poseFileExpNum, nameList0, nameList1, poseParams
 
-def prepare_filenames(nameList0, nameList1, idx, skip, outDir, testNum, flagFlow=False):
+def prepare_filenames(nameList0, nameList1, idx, skip, outDir):
     N0 = len(nameList0)
     N1 = len(nameList1)
-
-    if ( flagFlow ):
-        N0 = N0 - 1
-        N1 = N1 - 1
 
     assert(N0 > 0)
     assert(N1 > 0)
@@ -145,11 +155,6 @@ def prepare_filenames(nameList0, nameList1, idx, skip, outDir, testNum, flagFlow
     # Generate filenames.
     files0 = []
     files1 = []
-
-    if ( testNum > 0 ):
-        if ( testNum < N0 ):
-            N0 = testNum
-            N1 = testNum
 
     for i in range(N0):
         names0 = left2all(nameList0[i])
@@ -283,6 +288,7 @@ def upload_pose_files(cc, poses, localDir):
         upload_file_2_blob(cc, blob, fn)
 
 def process_single_file( name, 
+        barrierDownload, barrierUpload,
         cClient, jobStrList, 
         flagUpload=False, ccu=None, 
         npyForceConvert=False, 
@@ -295,23 +301,54 @@ def process_single_file( name,
 
     ret = STAT_OK
 
+    if ( "Barrier" == jobStrList[3] ):
+        cprint("%s: Enter barrier mode. " % (name), flagSilent)
+
+    #     bIdx = barrierDownload.wait()
+    #     if ( 0 == bIdx ):
+    #         barrierDownload.reset()
+
+    #     if ( flagUpload ):
+    #         bIdx = barrierUpload.wait()
+    #         if ( 0 == bIdx ):
+    #             barrierUpload.reset()
+        
+        endTime = time.time()
+    
+        s = "%s: Barrier. %ds for processing. %s " % (name, endTime - startTime, MSG_DELIMITER )
+
+        return [ret, s]
+
     s = "%s: from %s to %s. %s " % ( name, jobStrList[0], jobStrList[1], MSG_DELIMITER )
 
     cprint("%s. " % (jobStrList[0]), flagSilent)
 
     # Download the blob file.
     try:
+        # print("%s: Before cClient.get_blob_client(). " % (name))
         bClient = cClient.get_blob_client(blob=jobStrList[0])
+        # print("%s: After cClient.get_blob_client(). " % (name))
+
+        # bIdx = barrierDownload.wait()
+        # if ( 0 == bIdx ):
+        #     barrierDownload.reset()
+
+        # print("%s: Begin download. " % ( name ))
         data = bClient.download_blob()
+        # print("%s: End download. " % ( name ))
 
         outFn = "%s/%s" % ( jobStrList[2], jobStrList[1])
 
         parts = get_filename_parts( jobStrList[0] )
 
         # Write the data to the file system.
+        # print("%s: Before open() for byteData. " % (name))
         fp = open( outFn, "wb" )
+        # print("%s: After open() for byteData. " % (name))
         byteData = data.content_as_bytes()
+        # print("%s: Before writing byteData. " % (name))
         fp.write(byteData)
+        # print("%s: After writing byteData. " % (name))
         fp.close()
 
         # Special treatment for .npy file.
@@ -321,22 +358,42 @@ def process_single_file( name,
 
                 # Convert the data type.
                 array = array.astype(np.float32)
+                # print("%s: Convert. " % ( name ))
 
                 # Save the file again.
+                # print("%s: Before writing converted npy. " % (name))
                 np.save(outFn, array)
+                # print("%s: After writing converted npy. " % (name))
 
         # Check if we have to upload the file.
         if ( flagUpload ):
             # Get the blob even it is not exist.
+            # print("%s: Before ccu.get_blob_client(). " % (name))
             bcu = ccu.get_blob_client(blob=jobStrList[1])
+            # print("%s: After ccu.get_blob_client(). " % (name))
             
             if ( ".npy" == parts[2] ):
                 # Open the file.
+                # print("%s: Before open() for upload. " % (name))
                 fp = open( outFn, "rb" )
+                # print("%s: After open() for upload. " % (name))
+
+                # bIdx = barrierUpload.wait()
+                # if ( 0 == bIdx ):
+                #     barrierUpload.reset()
+
+                # print("%s: Before upload. " % (name))
                 bcu.upload_blob(fp, blob_type="BlockBlob", overwrite=True) 
+                # print("%s: After upload. " % (name))
                 fp.close()
             else:
+                # bIdx = barrierUpload.wait()
+                # if ( 0 == bIdx ):
+                #     barrierUpload.reset()
+                
+                # print("%s: Before upload. " % (name))
                 bcu.upload_blob(byteData, blob_type="BlockBlob", overwrite=True)
+                # print("%s: After upload. " % (name))
 
     except ResourceNotFoundError as ex:
         s = s + "Azure exception: %s. %s " % ( str(ex), MSG_DELIMITER )
@@ -360,7 +417,9 @@ def process_single_file( name,
 
     return [ret, s]
 
-def worker(name, q, p, rq, cClient, 
+def worker(name, q, p, rq,
+        barrierDownload, barrierUpload,
+        cClient, 
         flagUpload=False, ccu=None, 
         npyForceConvert=False, 
         flagSilent=False):
@@ -386,10 +445,14 @@ def worker(name, q, p, rq, cClient,
             jobStrList = q.get(True, 1)
             # print("{}: {}.".format(name, jobStrList))
 
-            ret, s = process_single_file(name, cClient, jobStrList, 
+            ret, s = process_single_file(name, 
+                barrierDownload, barrierUpload,
+                cClient, jobStrList, 
                 flagUpload, ccu, npyForceConvert, flagSilent)
 
+            # print("%s: Before rq.put(). " % (name))
             rq.put([ret, s], block=True)
+            # print("%s: After rq.put(). " % (name))
 
             q.task_done()
         except Empty as exp:
@@ -417,7 +480,9 @@ class dummy_args(object):
         self.upload_zip_overwrite = False
         self.npy_force_convert    = False
         self.np           = 2
+        self.main_prefix  = ""
         self.test_n       = 0
+        self.disable_child_silent = False
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Filter the files.")
@@ -476,8 +541,14 @@ def parse_args():
     parser.add_argument("--np", type=int, default=2, \
         help="The number of processes.")
 
+    parser.add_argument("--main-prefix", type=str, default="", \
+        help="The prefix of main process print.")
+
     parser.add_argument("--test-n", type=int, default=0, \
         help="The number of poses to process for testing. Set 0 to disable.")
+
+    parser.add_argument("--disable-child-silent", action="store_ture", default=False, \
+        help="Set this flag to disable silenting child process.")
 
     args = parser.parse_args()
 
@@ -491,7 +562,8 @@ def run(args):
     print("Main: Main process.")
     
     # Generate name lists.
-    nameList0, nameList1, poseParams = generate_name_lists(args.infile0, args.test_n)
+    poseFileExpNum, nameList0, nameList1, poseParams = generate_name_lists(
+        args.infile0, args.flow, args.test_n )
 
     # # Read the name list file.
     # nameList0 = read_name_list(args.infile0)
@@ -500,7 +572,7 @@ def run(args):
     # Prepare the filenames.
     files0, files1 = prepare_filenames(
         nameList0, nameList1, 
-        args.idx, args.skip, args.outdir, args.test_n, args.flow)
+        args.idx, args.skip, args.outdir)
 
     nFiles = len(files0)
 
@@ -514,25 +586,15 @@ def run(args):
         cClientUpload = get_azure_container_client( 
             args.upload_env, args.upload_c )
 
-    # Get the the pose files from the server.
-    poses, totalPosesSize = get_pose_objects(cClient, poseParams)
-
-    if ( args.test_n == 0 ):
-        if ( nFiles != totalPosesSize ):
-            raise Exception("nFiles != totalPosesSize. nFiles = %d, totalPosesSize = %d. " % 
-                ( nFiles, totalPosesSize ) )
-
-    # Write the pose files to local filesystem.
-    write_poses(poses, args.outdir)
-
-    # Upload the pose files.
-    if ( args.upload ):
-        print("Main: Uploading the pose files.")
-        upload_pose_files(cClientUpload, poses, args.outdir)
-
     # Prepare for the job queue.
     jobQ    = multiprocessing.JoinableQueue()
     resultQ = multiprocessing.Queue()
+
+    barrierDownload = multiprocessing.Barrier(args.np)
+    barrierUpload   = multiprocessing.Barrier(args.np)
+
+    nJobs, bJobs = ceil_integer( nFiles, args.np )
+    print("Main: nJobs: %d, bJobs: %d. " % ( nJobs, bJobs ))
 
     processes = []
     pipes     = []
@@ -545,8 +607,9 @@ def run(args):
             multiprocessing.Process( 
                 target=worker, 
                 args=["P%03d" % (i), jobQ, conn1, resultQ, 
+                    barrierDownload, barrierUpload, 
                     cClient, args.upload, cClientUpload, 
-                    args.npy_force_convert, True] ) )
+                    args.npy_force_convert, not args.disable_child_silent] ) )
         pipes.append(conn2)
 
     for p in processes:
@@ -555,24 +618,30 @@ def run(args):
     print("Main: All processes started.")
 
     for i in range(nFiles):
-        jobQ.put([ files0[i], files1[i], args.outdir ])
+        jobQ.put([ files0[i], files1[i], args.outdir, "null" ])
+
+    for i in range(bJobs):
+        jobQ.put( [ "null", "null", "null", "Barrier" ] )
 
     print("Main: All jobs submitted.")
 
     resultList = []
     resultCount = 0
 
-    while(resultCount < nFiles):
+    while(resultCount < nJobs):
         try:
-            print("Main: Get index %d. " % (resultCount))
+            print("%sMain: Get index %d. " % (args.main_prefix, resultCount))
             r = resultQ.get(block=True, timeout=1)
             resultList.append(r)
             resultCount += 1
         except Empty as exp:
-            if ( resultCount == nFiles ):
+            if ( resultCount == nJobs ):
                 print("Main: Last element of the result queue is reached.")
                 break
             time.sleep(0.5)
+
+    barrierUpload.abort()
+    barrierDownload.abort()
 
     jobQ.join()
 
@@ -605,6 +674,22 @@ def run(args):
     else:
         print("Main: Results written. ")
         fp.close()
+
+    # Get the the pose files from the server.
+    print("Main: Get pose files...........")
+    poses, totalPosesSize = get_pose_objects(cClient, poseParams)
+
+    if ( poseFileExpNum != totalPosesSize ):
+        raise Exception("FposeFileExpNumiles != totalPosesSize. poseFileExpNum = %d, totalPosesSize = %d. " % 
+            ( poseFileExpNum, totalPosesSize ) )
+
+    # Write the pose files to local filesystem.
+    write_poses(poses, args.outdir)
+
+    # Upload the pose files.
+    if ( args.upload ):
+        print("Main: Uploading the pose files.")
+        upload_pose_files(cClientUpload, poses, args.outdir)
 
     if ( args.zip ):
         # Zip.
@@ -676,6 +761,7 @@ def main(args):
         run(args)
     except Exception as ex:
         res = STAT_FAIL
+        print("Main: Exception: %s. " % ( str(ex) ))
 
     return res
 
