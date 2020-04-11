@@ -285,6 +285,7 @@ def upload_pose_files(cc, poses, localDir):
 def process_single_file( name, 
         cClient, jobStrList, 
         flagUpload=False, ccu=None, 
+        npyForceConvert=False, 
         flagSilent=False ):
     """
     name is the name of the process.
@@ -314,7 +315,7 @@ def process_single_file( name,
         fp.close()
 
         # Special treatment for .npy file.
-        if ( ".npy" == parts[2] ):
+        if ( npyForceConvert and ".npy" == parts[2] ):
                 # Open the file.
                 array = np.load(outFn)
 
@@ -360,7 +361,9 @@ def process_single_file( name,
     return [ret, s]
 
 def worker(name, q, p, rq, cClient, 
-        flagUpload=False, ccu=None, flagSilent=False):
+        flagUpload=False, ccu=None, 
+        npyForceConvert=False, 
+        flagSilent=False):
     """
     name: String, the name of this worker process.
     q: A JoinableQueue.
@@ -384,7 +387,7 @@ def worker(name, q, p, rq, cClient,
             # print("{}: {}.".format(name, jobStrList))
 
             ret, s = process_single_file(name, cClient, jobStrList, 
-                flagUpload, ccu, flagSilent)
+                flagUpload, ccu, npyForceConvert, flagSilent)
 
             rq.put([ret, s], block=True)
 
@@ -393,6 +396,28 @@ def worker(name, q, p, rq, cClient,
             pass
     
     cprint("%s: Work done." % (name), flagSilent)
+
+class dummy_args(object):
+    def __init__(self, infile0, outdir, zipname, idx):
+        self.infile0 = infile0
+        self.outdir  = outdir
+        self.zipname = zipname
+        self.idx     = idx
+
+        self.zip          = False
+        self.skip         = 0
+        self.flow         = False
+        self.remove_temporary_files = False
+        self.remove_zip   = False
+        self.upload       = False
+        self.download_env = "AZURE_STORAGE_CONNECTION_STRING"
+        self.upload_env   = "AZURE_STORAGE_CONNECTION_STRING"
+        self.download_c   = "tartanairdataset"
+        self.upload_c     = "tartanair-release0"
+        self.upload_zip_overwrite = False
+        self.npy_force_convert    = False
+        self.np           = 2
+        self.test_n       = 0
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Filter the files.")
@@ -445,6 +470,9 @@ def parse_args():
     parser.add_argument("--upload-zip-overwrite", action="store_true", default=False, \
         help="Set this flag to enable overwriting when uploading the zip file.")
 
+    parser.add_argument("--npy-force-convert", action="strore_true", default=False, \
+        help="Set this flag to force .npy files to be converted into float32.")
+
     parser.add_argument("--np", type=int, default=2, \
         help="The number of processes.")
 
@@ -457,14 +485,11 @@ def parse_args():
 
     return args
 
-if __name__ == "__main__":
+def run(args):
     startTime = time.time()
-    
-    # Parse the arguments.
-    args = parse_args()
 
     print("Main: Main process.")
-
+    
     # Generate name lists.
     nameList0, nameList1, poseParams = generate_name_lists(args.infile0, args.test_n)
 
@@ -520,7 +545,8 @@ if __name__ == "__main__":
             multiprocessing.Process( 
                 target=worker, 
                 args=["P%03d" % (i), jobQ, conn1, resultQ, 
-                    cClient, args.upload, cClientUpload, True] ) )
+                    cClient, args.upload, cClientUpload, 
+                    args.npy_force_convert, True] ) )
         pipes.append(conn2)
 
     for p in processes:
@@ -642,3 +668,19 @@ if __name__ == "__main__":
     endTime = time.time()
 
     print("Main: Job done. Total time is %ds." % (endTime - startTime))
+
+def main(args):
+    res = STAT_OK
+
+    try:
+        run(args)
+    except Exception as ex:
+        res = STAT_FAIL
+
+    return res
+
+if __name__ == "__main__":
+    # Parse the arguments.
+    args = parse_args()
+    main(args)
+    
