@@ -47,7 +47,7 @@ if __name__ == "__main__":
     # Configure the dummy argument.
     dArgs.download_c = "tartanairdataset"
     dArgs.upload     = True
-    dArgs.upload_c   = "tartanair-release0"
+    dArgs.upload_c   = "tartanair-release1"
     dArgs.upload_zip_overwrite = True
     dArgs.zip        = True
     dArgs.remove_zip = True
