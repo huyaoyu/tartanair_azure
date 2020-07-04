@@ -63,7 +63,7 @@ def read_name_list(fn):
 
     return lines
 
-def main_write_result_queue_2_file(fn, resultList):
+def main_write_result_queue_2_file(fn, resultList, name='main'):
     try:
         test_directory_by_filename(fn)
 
@@ -71,12 +71,12 @@ def main_write_result_queue_2_file(fn, resultList):
         for res in resultList:
             fp.write("%d %s %s\n" % ( res[0], MSG_DELIMITER, res[1] ))
     except OSError as ex:
-        print("Main: Open %s failed. " % (resFn))
+        print("%s: Open %s failed. " % (name, resFn))
     except Exception as ex:
-        print("Main: Exeption: %s. " % (str(ex)))
+        print("%s: Exeption: %s. " % (name, str(ex)))
         fp.close()
     else:
-        print("Main: Results written. ")
+        print("%s: Results written. " % (name))
         fp.close()
 
 def upload_file_2_blob(cc, blob, file, flagOverwrite=True):
@@ -207,22 +207,24 @@ def worker_rq(name, rq, nFiles, resFn, timeoutCountLimit=100):
             if (resultCount % 100 == 0):
                 print("%s: worker_rq collected %d results. " % (name, resultCount))
         except Empty as exp:
-            if ( resultCount == nFiles ):
-                print("%s: Last element of the result queue is reached." % (name))
-                break
-            else:
-                print("%s: Wait on rq-index %d. " % (name, resultCount))
-                time.sleep(0.5)
-                timeoutCount += 1
+            print("%s: Wait on rq-index %d. " % (name, resultCount))
+            time.sleep(0.5)
+            timeoutCount += 1
 
-                if ( timeoutCount == timeoutCountLimit ):
-                    print("%s: worker_rq reaches the timeout count limit (%d). Process abort. " % \
-                        (name, timeoutCountLimit))
-                    flagOK = False
-                    break
+            if ( timeoutCount == timeoutCountLimit ):
+                print("%s: worker_rq reaches the timeout count limit (%d). Process abort. " % \
+                    (name, timeoutCountLimit))
+                flagOK = False
+                break
 
     if (flagOK):
-        main_write_result_queue_2_file( resFn, resultList )
+        print("%s: All results processed. " % (name))
+
+    if ( resultCount > 0 ):
+        if ( resultCount != nFiles ):
+            print("%s: resultCount = %d, nFiles = %d. " % (name, resultCount, nFiles))
+
+        main_write_result_queue_2_file( resFn, resultList, name )
 
 class dummy_args(object):
     def __init__( self, 
