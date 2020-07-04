@@ -115,29 +115,11 @@ def process_single_file( name,
 
     ret = STAT_OK
 
-    if ( "Barrier" == jobStrList[2] ):
-        cprint("%s: Enter barrier mode. " % (name), flagSilent)
-
-    #     bIdx = barrierDownload.wait()
-    #     if ( 0 == bIdx ):
-    #         barrierDownload.reset()
-
-    #     if ( flagUpload ):
-    #         bIdx = barrierUpload.wait()
-    #         if ( 0 == bIdx ):
-    #             barrierUpload.reset()
-        
-        endTime = time.time()
-    
-        s = "%s: Barrier. %ds for processing. %s " % (name, endTime - startTime, MSG_DELIMITER )
-
-        return [ret, s]
-
     s = "%s: %s -> %s. %s " % ( name, jobStrList[0], jobStrList[1], MSG_DELIMITER )
 
     cprint("%s. " % (jobStrList[0]), flagSilent)
 
-    # Download the blob file.
+    # Upload file.
     try:
         # Get the blob even it is not exist.
         bcu = ccu.get_blob_client(blob=jobStrList[1])
@@ -165,8 +147,7 @@ def process_single_file( name,
     
     s = s + "%ds for processing. %s " % (endTime - startTime, MSG_DELIMITER )
 
-    cprint(s, flagSilent)
-    cprint("%s: " % (name), flagSilent)
+    cprint("%s: %s" % (name, s), flagSilent)
 
     return [ret, s]
 
@@ -208,6 +189,41 @@ def worker(name, q, p, rq,
     
     cprint("%s: Work done." % (name), flagSilent)
 
+def worker_rq(name, rq, nFiles, resFn, timeoutCountLimit=100):
+    resultList = []
+    resultCount = 0
+    timeoutCount = 0
+
+    flagOK = True
+
+    while(resultCount < nFiles):
+        try:
+            r = rq.get(block=True, timeout=1)
+            resultList.append(r)
+            resultCount += 1
+
+            timeoutCount = 0
+
+            if (resultCount % 100 == 0):
+                print("%s: worker_rq collected %d results. " % (name, resultCount))
+        except Empty as exp:
+            if ( resultCount == nFiles ):
+                print("%s: Last element of the result queue is reached." % (name))
+                break
+            else:
+                print("%s: Wait on rq-index %d. " % (name, resultCount))
+                time.sleep(0.5)
+                timeoutCount += 1
+
+                if ( timeoutCount == timeoutCountLimit ):
+                    print("%s: worker_rq reaches the timeout count limit (%d). Process abort. " % \
+                        (name, timeoutCountLimit))
+                    flagOK = False
+                    break
+
+    if (flagOK):
+        main_write_result_queue_2_file( resFn, resultList )
+
 class dummy_args(object):
     def __init__( self, 
         infile, infiledir, 
@@ -243,7 +259,7 @@ def parse_args():
     parser.add_argument("outdir", type=str, \
         help="The local output directory.")
 
-    parser.add_argument("--acc-str-env", type=str, defualt="AZURE_STORAGE_CONNECTION_STRING", \
+    parser.add_argument("--acc-str-env", type=str, default="AZURE_STORAGE_CONNECTION_STRING", \
         help="The environment variable for the access string.")
 
     parser.add_argument("--np", type=int, default=2, \
@@ -255,7 +271,7 @@ def parse_args():
     parser.add_argument("--test-n", type=int, default=0, \
         help="The number of poses to process for testing. Set 0 to disable.")
 
-    parser.add_argument("--disable-child-silent", action="store_ture", default=False, \
+    parser.add_argument("--disable-child-silent", action="store_true", default=False, \
         help="Set this flag to disable silenting child process.")
 
     args = parser.parse_args()
@@ -308,6 +324,13 @@ def run(args):
     for p in processes:
         p.start()
 
+    resFn = "%s/RQ.txt" % ( args.outdir )
+    pWorkerRQ = multiprocessing.Process( 
+        target=worker_rq,
+        args=["RQ", resultQ, nFiles, resFn] )
+    
+    pWorkerRQ.start()
+
     print("Main: All processes started.")
 
     # Submit all actual jobs.
@@ -318,21 +341,10 @@ def run(args):
 
     print("Main: All jobs submitted.")
 
-    # Main process starts to handle the messages in the result queue.
-    resultList = []
-    resultCount = 0
-    while(resultCount < nFiles):
-        try:
-            r = resultQ.get(block=True, timeout=1)
-            resultList.append(r)
-            resultCount += 1
-        except Empty as exp:
-            if ( resultCount == nFiles ):
-                print("Main: Last element of the result queue is reached.")
-                break
-            else:
-                print("%sMain: Wait on rq-index %d. " % (args.main_prefix, resultCount))
-                time.sleep(0.5)
+    # Main wait all results to be processed.
+    pWorkerRQ.join()
+
+    print("Main: pWorkerRQ joined. ")
 
     # Main process wait untill all worker. This should be always joined with out long blocking.
     jobQ.join()
@@ -349,10 +361,6 @@ def run(args):
         p.join()
 
     print("Main: All processes joined.")
-
-    print("Main: Starts process the result.")
-    resFn = "%s/RQ.txt" % ( args.outdir )
-    main_write_result_queue_2_file( resFn, resultList )
 
     endTime = time.time()
 
